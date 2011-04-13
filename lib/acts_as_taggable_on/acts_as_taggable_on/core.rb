@@ -21,7 +21,7 @@ module ActsAsTaggableOn::Taggable
 
           class_eval do
             has_many context_taggings, :as => :taggable, :dependent => :destroy, :include => :tag, :class_name => "ActsAsTaggableOn::Tagging",
-                     :conditions => ["#{ActsAsTaggableOn::Tagging.table_name}.tagger_id IS NULL AND #{ActsAsTaggableOn::Tagging.table_name}.context = ?", tags_type]
+            :conditions => ["#{ActsAsTaggableOn::Tagging.table_name}.tag_id = #{ActsAsTaggableOn::Tag.table_name}.id AND #{ActsAsTaggableOn::Tagging.table_name}.context = ?", tags_type]
             has_many context_tags, :through => context_taggings, :source => :tag, :class_name => "ActsAsTaggableOn::Tag"
           end
 
@@ -80,8 +80,18 @@ module ActsAsTaggableOn::Taggable
           conditions << "#{table_name}.#{primary_key} NOT IN (SELECT #{ActsAsTaggableOn::Tagging.table_name}.taggable_id FROM #{ActsAsTaggableOn::Tagging.table_name} JOIN #{ActsAsTaggableOn::Tag.table_name} ON #{ActsAsTaggableOn::Tagging.table_name}.tag_id = #{ActsAsTaggableOn::Tag.table_name}.id AND (#{tags_conditions}) WHERE #{ActsAsTaggableOn::Tagging.table_name}.taggable_type = #{quote_value(base_class.name)})"
 
         elsif options.delete(:any)
-          tags_conditions = tag_list.map { |t| sanitize_sql(["#{ActsAsTaggableOn::Tag.table_name}.name LIKE ?", t]) }.join(" OR ")
-          conditions << "#{table_name}.#{primary_key} IN (SELECT #{ActsAsTaggableOn::Tagging.table_name}.taggable_id FROM #{ActsAsTaggableOn::Tagging.table_name} JOIN #{ActsAsTaggableOn::Tag.table_name} ON #{ActsAsTaggableOn::Tagging.table_name}.tag_id = #{ActsAsTaggableOn::Tag.table_name}.id AND (#{tags_conditions}) WHERE #{ActsAsTaggableOn::Tagging.table_name}.taggable_type = #{quote_value(base_class.name)})"
+          conditions << tag_list.map { |t| sanitize_sql(["#{ActsAsTaggableOn::Tag.table_name}.name LIKE ?", t]) }.join(" OR ")
+
+          tagging_join  = " JOIN #{ActsAsTaggableOn::Tagging.table_name}" +
+                          "   ON #{ActsAsTaggableOn::Tagging.table_name}.taggable_id = #{table_name}.#{primary_key}" +
+                          "  AND #{ActsAsTaggableOn::Tagging.table_name}.taggable_type = #{quote_value(base_class.name)}" +
+                          " JOIN #{ActsAsTaggableOn::Tag.table_name}" +
+                          "   ON #{ActsAsTaggableOn::Tagging.table_name}.tag_id = #{ActsAsTaggableOn::Tag.table_name}.id"
+
+          tagging_join << "  AND " + sanitize_sql(["#{ActsAsTaggableOn::Tagging.table_name}.context = ?", context.to_s]) if context
+          select_clause = "DISTINCT #{table_name}.*" unless context and tag_types.one?
+
+          joins << tagging_join
 
         else
           tags = ActsAsTaggableOn::Tag.named_any(tag_list)
@@ -115,8 +125,8 @@ module ActsAsTaggableOn::Taggable
           group = "#{group_columns} HAVING COUNT(#{taggings_alias}.taggable_id) = #{tags.size}"
         end
 
-
-        scoped(:joins      => joins.join(" "),
+        scoped(:select     => select_clause,
+               :joins      => joins.join(" "),
                :group      => group,
                :conditions => conditions.join(" AND "),
                :order      => options[:order],
